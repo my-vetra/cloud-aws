@@ -1,0 +1,536 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless backend with API Gateway, Lambda, DynamoDB, and Cognito federation.
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 15
+    MemorySize: 256
+    Tracing: Active
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref AppTable
+        MAX_BODY_BYTES: !Ref MaxBodyBytes
+        SERVICE_NAME: vetra-api
+        STAGE: !Ref Stage
+    LogRetentionInDays: 14
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+  MaxBodyBytes:
+    Type: Number
+    Default: 65536
+  ApiRateLimit:
+    Type: Number
+    Default: 10
+  ApiBurstLimit:
+    Type: Number
+    Default: 5
+  EnableUsagePlan:
+    Type: String
+    Default: true
+    AllowedValues: [true, false]
+  UsagePlanQuota:
+    Type: Number
+    Default: 50000
+  UsagePlanThrottleRate:
+    Type: Number
+    Default: 10
+  UsagePlanThrottleBurst:
+    Type: Number
+    Default: 20
+  HostedUIDomainPrefix:
+    Type: String
+    Description: Unique prefix for Cognito Hosted UI domain.
+  CallbackURLs:
+    Type: CommaDelimitedList
+  LogoutURLs:
+    Type: CommaDelimitedList
+  GoogleClientIdParamName:
+    Type: String
+    Description: SSM parameter name holding Google OAuth client id.
+  GoogleClientSecretParamName:
+    Type: String
+    Description: SSM parameter name holding Google OAuth client secret.
+  AppleClientIdParamName:
+    Type: String
+    Description: SSM parameter name holding Apple client id.
+  AppleClientSecretParamName:
+    Type: String
+    Description: SSM parameter name holding Apple client secret.
+  AppleIssuer:
+    Type: String
+    Default: https://appleid.apple.com
+
+Conditions:
+  CreateUsagePlan: !Equals [!Ref EnableUsagePlan, "true"]
+
+Resources:
+  AppTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "vetra-${Stage}"
+      AutoVerifiedAttributes: [email]
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+        - Name: tenant
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          RequireLowercase: true
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref HostedUIDomainPrefix
+      UserPoolId: !Ref UserPool
+
+  GoogleIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      ProviderName: Google
+      ProviderType: Google
+      UserPoolId: !Ref UserPool
+      AttributeMapping:
+        email: email
+        given_name: given_name
+        family_name: family_name
+      ProviderDetails:
+        client_id: !Sub "{{resolve:ssm:${GoogleClientIdParamName}}}"
+        client_secret: !Sub "{{resolve:ssm-secure:${GoogleClientSecretParamName}}}"
+        authorize_scopes: "openid email profile"
+
+  AppleIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      ProviderName: Apple
+      ProviderType: OIDC
+      UserPoolId: !Ref UserPool
+      AttributeMapping:
+        email: email
+      ProviderDetails:
+        client_id: !Sub "{{resolve:ssm:${AppleClientIdParamName}}}"
+        client_secret: !Sub "{{resolve:ssm-secure:${AppleClientSecretParamName}}}"
+        authorize_scopes: "openid email name"
+        attributes_request_method: GET
+        oidc_issuer: !Ref AppleIssuer
+        authorize_url: https://appleid.apple.com/auth/authorize
+        token_url: https://appleid.apple.com/auth/token
+        jwks_uri: https://appleid.apple.com/auth/keys
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: vetra-app
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      CallbackURLs: !Ref CallbackURLs
+      LogoutURLs: !Ref LogoutURLs
+      SupportedIdentityProviders: [COGNITO, Google, Apple]
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH]
+      RefreshTokenValidity: 30
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admin
+      UserPoolId: !Ref UserPool
+      Precedence: 1
+
+  UserGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: user
+      UserPoolId: !Ref UserPool
+      Precedence: 2
+
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "vetra-api-${Stage}"
+      StageName: !Ref Stage
+      TracingEnabled: true
+      EndpointConfiguration: REGIONAL
+      MethodSettings:
+        - LoggingLevel: INFO
+          ResourcePath: "/*"
+          HttpMethod: "*"
+          MetricsEnabled: true
+          DataTraceEnabled: false
+          ThrottlingBurstLimit: !Ref ApiBurstLimit
+          ThrottlingRateLimit: !Ref ApiRateLimit
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt UserPool.Arn
+            Identity:
+              ReauthorizeEvery: 300
+      Models:
+        EventPayload:
+          type: object
+          properties:
+            eventType:
+              type: string
+              minLength: 1
+              maxLength: 128
+            deviceId:
+              type: string
+              minLength: 1
+              maxLength: 128
+            ts:
+              type: string
+              format: date-time
+            eventId:
+              type: string
+              minLength: 1
+              maxLength: 128
+            payload:
+              type: object
+              additionalProperties: true
+          required: [eventType, deviceId, ts, payload]
+          additionalProperties: false
+      DefinitionBody:
+        openapi: 3.0.1
+        info:
+          title: Vetra API
+          version: "1.0"
+        paths:
+          /v1/health:
+            get:
+              responses:
+                '200':
+                  description: OK
+              x-amazon-apigateway-integration:
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HealthFunction.Arn}/invocations
+                httpMethod: POST
+                type: aws_proxy
+          /v1/events:
+            post:
+              security:
+                - cognitoAuthorizer: []
+              x-amazon-apigateway-request-validator: body-only
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/EventPayload'
+              responses:
+                '200':
+                  description: Accepted
+              x-amazon-apigateway-integration:
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestEventFunction.Arn}/invocations
+                httpMethod: POST
+                type: aws_proxy
+          /v1/rollups:
+            get:
+              security:
+                - cognitoAuthorizer: []
+              parameters:
+                - in: query
+                  name: from
+                  required: true
+                  schema:
+                    type: string
+                - in: query
+                  name: to
+                  required: true
+                  schema:
+                    type: string
+                - in: query
+                  name: deviceId
+                  required: false
+                  schema:
+                    type: string
+              responses:
+                '200':
+                  description: Rollups
+              x-amazon-apigateway-integration:
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetRollupsFunction.Arn}/invocations
+                httpMethod: POST
+                type: aws_proxy
+          /v1/admin/ping:
+            get:
+              security:
+                - cognitoAuthorizer: []
+              responses:
+                '200':
+                  description: Admin pong
+              x-amazon-apigateway-integration:
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminPingFunction.Arn}/invocations
+                httpMethod: POST
+                type: aws_proxy
+        components:
+          securitySchemes:
+            cognitoAuthorizer:
+              type: apiKey
+              name: Authorization
+              in: header
+              x-amazon-apigateway-authorizer:
+                type: cognito_user_pools
+                providerARNs:
+                  - !GetAtt UserPool.Arn
+          schemas:
+            EventPayload:
+              type: object
+              properties:
+                eventType:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                deviceId:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                ts:
+                  type: string
+                  format: date-time
+                eventId:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                payload:
+                  type: object
+                  additionalProperties: true
+              required: [eventType, deviceId, ts, payload]
+              additionalProperties: false
+        x-amazon-apigateway-request-validators:
+          body-only:
+            validateRequestBody: true
+            validateRequestParameters: false
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: vetra.handlers.health.handler
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /v1/health
+            Method: get
+            Auth:
+              Authorizer: NONE
+
+  IngestEventFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: vetra.handlers.ingest_event.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /v1/events
+            Method: post
+            RequestModel:
+              Model: EventPayload
+              Required: true
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  GetRollupsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: vetra.handlers.get_rollups.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /v1/rollups
+            Method: get
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  AdminPingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: vetra.handlers.admin_ping.handler
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /v1/admin/ping
+            Method: get
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Lambda errors exceed threshold
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestEventFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Lambda p95 duration high
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestEventFunction
+      ExtendedStatistic: p95
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  Api5XXAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: API Gateway 5XX errors
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref ApiGateway
+        - Name: Stage
+          Value: !Ref Stage
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  ApiThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: API Gateway throttles detected
+      Namespace: AWS/ApiGateway
+      MetricName: Throttles
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref ApiGateway
+        - Name: Stage
+          Value: !Ref Stage
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  ApiUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Condition: CreateUsagePlan
+    Properties:
+      UsagePlanName: !Sub "vetra-${Stage}-plan"
+      Throttle:
+        BurstLimit: !Ref UsagePlanThrottleBurst
+        RateLimit: !Ref UsagePlanThrottleRate
+      Quota:
+        Limit: !Ref UsagePlanQuota
+        Period: MONTH
+      ApiStages:
+        - ApiId: !Ref ApiGateway
+          Stage: !Ref Stage
+
+  ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Condition: CreateUsagePlan
+    Properties:
+      Name: !Sub "vetra-${Stage}-key"
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref ApiGateway
+          StageName: !Ref Stage
+
+  ApiUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Condition: CreateUsagePlan
+    Properties:
+      KeyId: !Ref ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref ApiUsagePlan
+
+Outputs:
+  ApiBaseUrl:
+    Description: Base URL for the API
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Stage}"
+  UserPoolId:
+    Description: Cognito User Pool Id
+    Value: !Ref UserPool
+  UserPoolDomain:
+    Description: Hosted UI domain
+    Value: !Ref UserPoolDomain
+  AppClientId:
+    Description: Cognito App Client Id
+    Value: !Ref UserPoolClient
+  TableName:
+    Description: DynamoDB table name
+    Value: !Ref AppTable

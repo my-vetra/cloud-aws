@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vetra"
+version = "0.1.0"
+description = "Production-ready serverless backend on AWS"
+authors = [{ name = "Adeesh Devanand" }]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "aws-lambda-powertools==2.31.0",
+    "boto3>=1.28,<2.0",
+    "botocore>=1.31,<2.0",
+    "jsonschema>=4.19,<5",
+    "python-dateutil>=2.8,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "moto[dynamodb]>=4.2",
+    "black>=24.4",
+    "ruff>=0.5",
+    "mypy>=1.8",
+    "types-python-dateutil",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "UP", "B", "S", "W"]
+ignore = ["S311"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

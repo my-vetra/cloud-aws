@@ -1,0 +1,57 @@
+{
+  "info": {
+    "name": "Vetra API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {"raw": "{{baseUrl}}/v1/health", "host": ["{{baseUrl}}"], "path": ["v1", "health"]}
+      }
+    },
+    {
+      "name": "Ingest Event",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{token}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventType\": \"click\",\n  \"deviceId\": \"device-1\",\n  \"ts\": \"2024-01-01T00:00:00Z\",\n  \"payload\": {\"foo\": \"bar\"}\n}"
+        },
+        "url": {"raw": "{{baseUrl}}/v1/events", "host": ["{{baseUrl}}"], "path": ["v1", "events"]}
+      }
+    },
+    {
+      "name": "Rollups",
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{token}}"}],
+        "url": {
+          "raw": "{{baseUrl}}/v1/rollups?from=2024-01-01&to=2024-01-07&deviceId=device-1",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "rollups"],
+          "query": [
+            {"key": "from", "value": "2024-01-01"},
+            {"key": "to", "value": "2024-01-07"},
+            {"key": "deviceId", "value": "device-1"}
+          ]
+        }
+      }
+    },
+    {
+      "name": "Admin Ping",
+      "request": {
+        "method": "GET",
+        "header": [{"key": "Authorization", "value": "Bearer {{token}}"}],
+        "url": {"raw": "{{baseUrl}}/v1/admin/ping", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "ping"]}
+      }
+    }
+  ],
+  "event": []
+}

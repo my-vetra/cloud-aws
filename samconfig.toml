@@ -1,0 +1,9 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "vetra-serverless"
+resolve_s3 = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+confirm_changeset = true
+region = "us-east-1"
+parameter_overrides = "Stage=dev MaxBodyBytes=65536 ApiRateLimit=10 ApiBurstLimit=5 EnableUsagePlan=true UsagePlanQuota=50000 UsagePlanThrottleRate=10 UsagePlanThrottleBurst=20 HostedUIDomainPrefix=vetra-demo CallbackURLs=https://example.com/callback LogoutURLs=https://example.com/logout GoogleClientIdParamName=/vetra/google/client_id GoogleClientSecretParamName=/vetra/google/client_secret AppleClientIdParamName=/vetra/apple/client_id AppleClientSecretParamName=/vetra/apple/client_secret"

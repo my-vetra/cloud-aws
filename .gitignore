@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# VS Code
+.vscode/
+
+# SAM / build artifacts
+.aws-sam/
+.aws/
+dist/
+build/
+
+# Node
+node_modules/
+
+# Mac/others
+.DS_Store

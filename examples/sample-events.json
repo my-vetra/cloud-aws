@@ -1,0 +1,14 @@
+[
+  {
+    "eventType": "click",
+    "deviceId": "device-1",
+    "ts": "2024-01-01T00:00:00Z",
+    "payload": {"foo": "bar"}
+  },
+  {
+    "eventType": "view",
+    "deviceId": "device-2",
+    "ts": "2024-01-02T12:00:00Z",
+    "payload": {"page": "home"}
+  }
+]
