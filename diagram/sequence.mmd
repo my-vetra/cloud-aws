@@ -1,0 +1,26 @@
+sequenceDiagram
+  participant User
+  participant Cognito as Cognito Hosted UI
+  participant Google
+  participant Apple
+  participant APIGW as API Gateway
+  participant LambdaIngest as Lambda ingest_event
+  participant LambdaRollup as Lambda get_rollups
+  participant Dynamo as DynamoDB
+
+  User->>Cognito: Login (Auth Code flow)
+  Cognito->>Google: Federated login
+  Cognito->>Apple: Federated login
+  Cognito-->>User: Auth code
+  User->>APIGW: POST /v1/events (Authorization: Bearer id_token)
+  APIGW->>APIGW: Validate JWT + schema + rate limit
+  APIGW->>LambdaIngest: Proxy request with claims
+  LambdaIngest->>Dynamo: TransactWriteItems (Put Event + Update Rollup)
+  Dynamo-->>LambdaIngest: Success / ConditionalFail
+  LambdaIngest-->>APIGW: 200 or 200 duplicate_ignored
+  User->>APIGW: GET /v1/rollups?from..to&deviceId
+  APIGW->>LambdaRollup: Proxy with claims
+  LambdaRollup->>Dynamo: Query PK/SK range for rollups
+  LambdaRollup->>Dynamo: Query GSI1 for device events
+  Dynamo-->>LambdaRollup: Items
+  LambdaRollup-->>User: Rollups + events

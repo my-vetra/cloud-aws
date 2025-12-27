@@ -1,0 +1,28 @@
+flowchart LR
+  user(User)
+  ui["Cognito Hosted UI"]
+  idp1[Google]
+  idp2[Apple OIDC]
+  api[API Gateway\nRate limit + Validator + Cognito authorizer]
+  lambdaIngest[Lambda: ingest_event]
+  lambdaRollup[Lambda: get_rollups]
+  lambdaAdmin[Lambda: admin_ping]
+  ddb[(DynamoDB\nPK/SK + GSI1)]
+  cw[CloudWatch Logs/Alarms]
+  waf[Optional WAF size constraint]
+
+  user --> ui
+  ui -- OAuth2 code --> api
+  ui --> idp1
+  ui --> idp2
+  api --> lambdaIngest
+  api --> lambdaRollup
+  api --> lambdaAdmin
+  lambdaIngest --> ddb
+  lambdaRollup --> ddb
+  lambdaAdmin --> ddb
+  api --> cw
+  lambdaIngest --> cw
+  lambdaRollup --> cw
+  lambdaAdmin --> cw
+  api -. payload size .-> waf
